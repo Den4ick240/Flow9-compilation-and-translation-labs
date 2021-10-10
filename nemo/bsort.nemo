@@ -1,0 +1,35 @@
+x: [int];
+i: int;
+j: int;
+temp: int;
+
+(
+    i = 0;
+    while((100 - i) > 0) (
+        x = (upd(x, i, (100 - i)));
+        i = (i + 1)
+    );
+    i = 0;
+    while(i < 100) (
+        print((app(x, i)));
+        i = (i + 1)
+    );
+    i = 0;
+    while(i < 100) (
+        j = (i + 1);
+        while(j < 100) (
+            if((app(x, i)) > (app(x, j))) (
+                temp = (app(x, i));
+                x = (upd(x, i, (app(x, j))));
+                x = (upd(x, j, temp))
+            ) else ( j = j );
+            j = (j + 1)
+        );
+        i = (i + 1)
+    );
+    i = 0;
+    while(i < 100) (
+        print((app(x, i)));
+        i = (i + 1)
+    )
+))*

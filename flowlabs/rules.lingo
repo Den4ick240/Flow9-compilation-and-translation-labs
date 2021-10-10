@@ -1,0 +1,3 @@
+numberB = numberB | abstractExp; 
+abstractExp = ws '_' name$n ws
+    {AbstractVariable($n)};

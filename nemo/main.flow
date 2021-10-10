@@ -1,0 +1,508 @@
+import lingo/pegcode/driver;
+import runtime;
+
+Type ::= IntType, ArrType;
+IntType();
+ArrType(t :Type);
+
+Expression ::= ExpressionBinOperation, ExpressionVariable, ExpressionApp, ExpressionUpd, ExpressionConst;
+ExpressionVariable(varName:string);
+ExpressionBinOperation(operator:string, leftExpression:Expression, rightExpression:Expression);
+ExpressionApp(array:Expression, index:Expression);
+ExpressionUpd(array:Expression, index:Expression, value:Expression);
+ExpressionConst(value:int);
+
+NemoOperator ::= NemoAssignment, NemoTest, NemoChoice, NemoLoop, NemoPrint, NemoSequence, NemoNotTest;
+NemoAssignment(leftExp:ExpressionVariable, rightExp:Expression);
+NemoTest(predicate:string, leftExpression:Expression, rightExpression:Expression);
+NemoNotTest(test:NemoTest);
+NemoChoice(operators:[NemoOperator]); 
+NemoLoop(operator:NemoOperator);
+NemoPrint(expression:Expression);
+NemoSequence(operators:[NemoOperator]);
+
+NemoProgram(vars:[VarDeclarationLine], operator:NemoOperator);
+VarDeclarationLine(names : [string], type:Type);
+
+Operator ::= AssignmentOp, PrintOp, TestOp;
+AssignmentOp(label:int, next:[int], leftExp:ExpressionVariable, rightExp:Expression);
+PrintOp(label:int, next:[int], exp:Expression);
+TestOp(label:int, next:[int], alternative:[int], operator:string, leftExp:Expression, rightExp:Expression);
+Program(vars:[VarDeclarationLine], operators:[Operator]);
+
+buildSubSemanticActions = { 
+    setTree(defaultPegActions.t, "buildSub", 
+    \xs:[flow] -> 
+    fold(xs[1], xs[0], \acc, x -> 
+    ExpressionBinOperation(x.operator, acc, x.rightExpression))) 
+    |> SemanticActions;
+}
+
+parseNemo(s: string) -> NemoProgram {
+    parsic(compilePegGrammar("#include nemo.lingo"), s, buildSubSemanticActions)
+}
+
+parseProgram(s:string) -> Program {
+    parsic(compilePegGrammar("#include vm.lingo"), s, buildSubSemanticActions)
+}
+oppositePredicates : ref Maybe<Tree<string, string>> = ref None();
+oppositePredicate(p:string) -> string {
+    either(lookupTree(onlyOnce(oppositePredicates, 
+    \ -> makeTree() 
+    |> \more -> setTree(more, ">", "<=")
+    |> \moreOrEqual -> setTree(moreOrEqual, ">=", "<")
+    |> \lessOrEqual -> setTree(lessOrEqual, "<=", ">")
+    |> \less -> setTree(less, "<", ">=")
+    |> \equals -> setTree(equals, "==", "!=")
+    |> \notEquals -> setTree(notEquals, "!=", "==")
+    ), p), p)
+}
+
+btsAssignment(leftExp :ExpressionVariable, rightExp :Expression, offset:int)
+ -> Pair<int, [Operator]> {
+    Pair(offset + 1, [AssignmentOp(offset, [offset + 1], leftExp, rightExp)])
+}
+
+btsTest(predicate:string, leftExp:Expression, rightExp:Expression, offset:int) 
+-> Pair<int, [Operator]> {
+    Pair(offset + 1, [TestOp(offset, [offset + 1], [], predicate, leftExp, rightExp)])
+}
+
+kostyl(label:int, next:[int]) -> TestOp {
+    TestOp(label, next, [], "==", ExpressionConst(0), ExpressionConst(0))
+}
+
+replaceElem(c:int, a:int, b:int) -> int {
+    if (c == a) { b } else { c }
+}
+replaceLabels(a:int, b:int, ops:[Operator]) -> [Operator] {
+    map(ops, \c:Operator -> {
+        label_ = replaceElem(c.label, a, b);
+        next_ = map(c.next, \cc -> replaceElem(cc, a, b));
+        switch (c) {
+            AssignmentOp(label, next, l, r): AssignmentOp(label_, next_, l, r)
+            PrintOp(label, next, e): PrintOp(label_, next_, e);
+            TestOp(label, next, alt, op, l, r): TestOp(label_, next_, map(alt, \cc -> replaceElem(cc, a, b)), op, l, r);
+        }
+    })
+}
+
+btsChoice(nemoOperators:[NemoOperator], startPoint:int) -> Pair<int, [Operator]> {
+    firstChoiceOffset = startPoint + 1;
+    unpair(
+    fold(nemoOperators, Pair(firstChoiceOffset, []), \p, nemoOperator -> {
+                b = bts(nemoOperator, p.first);
+                Pair(b.first, concat(p.second, [b]))
+    }), \lastOffset, choices -> 
+    unpair(
+        fold(choices, Pair([firstChoiceOffset], []), 
+            \p, choice:Pair<int, [Operator]> -> unpair(p, \offsets, operators ->
+                Pair(
+                    concat(offsets, if (choice.first == lastOffset) { [] } else { [choice.first] }), 
+                    concat(operators, replaceLabels(choice.first, lastOffset, choice.second))))), 
+        \next, operators -> Pair(lastOffset, concat([kostyl(startPoint, next)], operators))))
+}
+
+btsLoop(operator:NemoOperator, offset:int) -> Pair<int, [Operator]> {
+    unpair(bts(operator, offset + 1),
+        \end, operators -> 
+        Pair(end, concat(
+            [kostyl(offset, [offset + 1, end])],
+            replaceLabels(end, offset, operators)
+        ))
+    )
+}
+
+btsPrint(expression:Expression, offset:int) -> Pair<int, [Operator]> {
+    Pair(offset + 1, [PrintOp(offset, [offset + 1], expression)])
+}
+
+btsSequence(operators:[NemoOperator], offset:int) -> Pair<int, [Operator]> {
+    btsSequenceTail(operators, 0, offset, [])
+}
+
+btsSequenceTail(nemoOperators:[NemoOperator], index:int, offset:int, operators:[Operator]) -> Pair<int, [Operator]> {
+    if (index < length(nemoOperators)) {          
+        b = bts(nemoOperators[index], offset);  
+        btsSequenceTail(nemoOperators, index + 1, b.first, concat(operators, b.second))
+    } else {
+        Pair(offset, operators)
+    }
+}
+
+bts(nemoOperator :NemoOperator, offset :int) -> Pair<int, [Operator]> {
+    switch(nemoOperator) {
+        NemoAssignment(leftExp, rightExp): btsAssignment(leftExp, rightExp, offset);
+        NemoTest(op, leftExp, rightExp): btsTest(op, leftExp, rightExp, offset);
+        NemoNotTest(test): btsTest(oppositePredicate(test.predicate), test.leftExpression, test.rightExpression, offset);
+        NemoChoice(operators): btsChoice(operators, offset);
+        NemoLoop(operator): btsLoop(operator, offset);
+        NemoPrint(expression): btsPrint(expression, offset);
+        NemoSequence(operators): btsSequence(operators, offset);
+    }
+}
+
+translate(nemo:NemoProgram) -> Program {
+    Program(nemo.vars,secondOfPair(bts(nemo.operator, 0)));    
+}
+
+type2s(t:Type) -> string {
+    switch(t) {
+        IntType(): "int";
+        ArrType(it): "[" + type2s(it) + "]";
+    }
+}
+
+exp2s(e:Expression) -> string {
+    switch (e) {
+        ExpressionVariable(varName): varName;
+        ExpressionBinOperation(operator, leftExpression, rightExpression): 
+            "(" + exp2s(leftExpression) + operator + exp2s(rightExpression) + ")";
+        ExpressionApp(array, index): "app(" + exp2s(array) + "," + exp2s(index) + ")";
+        ExpressionUpd(array, index, value): "upd(" + exp2s(array) + "," + exp2s(index) + "," + exp2s(value) + ")";
+        ExpressionConst(value): i2s(value);
+    }
+}
+
+vars2s(v:[VarDeclarationLine]) -> string {
+    concatStrings(
+        map(v, \line -> strGlue(line.names, ",") + ":" + type2s(line.type) + "\n") 
+    )
+}
+
+labels2s(arr:[int]) -> string {
+    "(" + strGlue(map(arr, i2s), ",") + ")"
+}
+
+op2s(op:Operator) -> string {
+    i2s(op.label) + ":" +
+    switch (op) {
+        PrintOp(u1, u2, expr): "print " + exp2s(expr);
+        TestOp(u1, u2, u3, oper, le, re): exp2s(le) + oper + exp2s(re);
+        AssignmentOp(u1, u2, le, re): exp2s(le) + "=" + exp2s(re);
+    } +
+    labels2s(op.next) +
+    switch (op) {
+        TestOp(u1, u2, alt, u3, u4, u5): labels2s(alt);
+        default: "";
+    } 
+    + "\n"
+}
+
+opers2s(ops:[Operator]) -> string {
+    concatStrings( map(ops, op2s))
+}
+
+program2s(p:Program) -> string {
+    concatStrings([vars2s(p.vars), "#\n", opers2s(p.operators)])
+}
+
+getOperatorsByLabel(label:int, operators:[Operator]) -> [Operator] {
+    filter(operators, \o -> o.label == label)
+}
+
+isArrType(type:Type) -> bool {
+    switch(type) {
+        ArrType(u): true;
+        default: false;
+    }
+}
+
+findExpType(exp: Expression, varTypeTree:Tree<string, Type>) -> Maybe<Type> {
+    switch(exp) {
+        ExpressionVariable(varName): lookupTree(varTypeTree, varName);
+        ExpressionBinOperation(operator, leftExpression, rightExpression): 
+            maybeBind2(\l, r -> if (l == r) { Some(l) } else { None() })
+            (findExpType(leftExpression, varTypeTree), findExpType(rightExpression, varTypeTree));
+        ExpressionApp(array, index):
+            maybeBind2(\a, i -> switch(a) { ArrType(t): if (i == IntType()) {Some(t)} else {None()} default: None()})
+            (findExpType(array, varTypeTree), findExpType(index, varTypeTree));
+        ExpressionUpd(array, index, value):
+            maybeBind2(\i, v -> if (i == IntType()) {Some(v)} else {None()})
+            (
+                findExpType(index, varTypeTree),
+                maybeBind2(\a, v -> if (a == ArrType(v)) {Some(a)} else {None()})
+                (findExpType(array, varTypeTree), findExpType(value, varTypeTree))
+            )
+        ExpressionConst(value): Some(IntType());
+    }
+}
+
+invalidAssignment(op:AssignmentOp, varTypeTree:Tree<string, Type>) -> bool {
+    isNone(
+        maybeBind2(\l, r -> if (l == r) {Some(l)} else {None()})
+        (
+            findExpType(op.leftExp, varTypeTree),
+            findExpType(op.rightExp, varTypeTree)
+        )
+    )
+}
+
+invalidTest(test:TestOp, varTypeTree:Tree<string, Type>) -> bool {
+    isNone(
+        maybeBind2(\l, r -> if (l == IntType() && r == IntType()) {Some(l)} else {None()})
+        (
+            findExpType(test.leftExp, varTypeTree),
+            findExpType(test.rightExp, varTypeTree)
+        )
+    )
+} 
+
+invalidOperator(op:Operator, varTypeTree:Tree<string, Type>) -> bool {
+    switch(op) {
+        AssignmentOp(a,b,c,d): invalidAssignment(op, varTypeTree);
+        TestOp(a,b,c,d,e,f): invalidTest(op, varTypeTree);
+        PrintOp(a,b,c): isNone(findExpType(op.exp, varTypeTree));
+    }
+}
+
+validateTypes(program :Program) -> bool {
+    varTypeTree = fold(program.vars, makeTree(), \_tree, line -> {
+        fold(line.names, _tree, \tree, name -> setTree(tree, name, line.type))
+    });
+    switch(find(program.operators, \op -> invalidOperator(op, varTypeTree))) {
+        Some(v): {
+            println("Invalid operator found:");
+            println(v);
+            false
+        }
+        None(): true
+    }
+}
+
+printExp(exp:Expression, calc:Maybe<Value>) -> void {
+    println(exp);
+    switch(calc) {
+        Some(c): println(c);
+        None(): println("none");
+    }
+}
+
+Value::= IntValue, ArrValue;
+IntValue(v:int);
+ArrValue(v:[Value]);
+State(label:int, varTree:Tree<string, Value>);
+
+binOpCalc(op:string, l:int, r:int) -> int {
+    if (op == "+") {
+        l + r
+    } else if (op == "-") {
+        l - r
+    } else if (op == "*") {
+        l * r
+    } else if (op == "/") {
+        l / r
+    } else {
+        0
+    }
+}
+
+calculateBinExp(op:string, lvalue:Maybe<Value>, rvalue:Maybe<Value>) -> Maybe<Value> {
+    maybeBind2(\l, r -> {
+        switch(l) {
+            IntValue(lv): {
+                switch(r) {
+                    IntValue(rv): {
+                        Some(IntValue(binOpCalc(op, lv, rv)))
+                    }
+                    default: None();
+                }
+            }
+            default: None()
+        }
+    }) (
+        lvalue, rvalue
+    )
+}
+
+calculateApp = maybeBind2(\arr, id -> {
+        switch(arr) {
+            ArrValue(a): {
+                switch(id) {
+                    IntValue(i): {
+                        if (length(a) <= i) {
+                            None()
+                        } else {
+                            Some(a[i])
+                        }
+                    }
+                    default: None();
+                }
+            }
+            default: None();
+        }
+    });
+
+calculateUpd(array:Maybe<Value>, index:Maybe<Value>, value:Maybe<Value>) -> Maybe<Value> {
+    switch(array) {
+        Some(arr): {
+            switch(index) {
+                Some(id): {
+                    switch(value) {
+                        Some(val): {
+                            switch(arr) {
+                                ArrValue(a): {
+                                    switch(id) {
+                                        IntValue(i): {
+                                            if (length(a) < i) {
+                                                None();
+                                            } else {
+                                                Some(ArrValue(replace(a, i, val)))
+                                            }
+                                        }
+                                        default: None();
+                                    }
+                                }
+                                default: None();
+                            }
+                        }
+                        default: None();
+                    }
+                }
+                default: None();
+            }
+        }
+        default: None();
+    }
+}
+
+
+calculateExp(exp:Expression, varTree:Tree<string, Value>) -> Maybe<Value> {
+    switch(exp) {
+        ExpressionVariable(varName): lookupTree(varTree, varName); 
+        ExpressionBinOperation(operator, leftExpression, rightExpression): 
+            calculateBinExp(operator, calculateExp(leftExpression, varTree), calculateExp(rightExpression, varTree));
+        ExpressionApp(array, index): 
+            calculateApp(calculateExp(array, varTree), calculateExp(index, varTree));
+        ExpressionUpd(array, index, value):
+            calculateUpd(calculateExp(array, varTree), calculateExp(index, varTree), calculateExp(value, varTree));
+        ExpressionConst(value): Some(IntValue(value));
+    }
+}
+
+calcTest(operator:string, l:int, r:int) -> bool {
+    if (operator == ">") {
+        l > r
+    } else if (operator == "<") {
+        l < r
+    } else if (operator == "==") {
+        l == r
+    } else if (operator == "<=") {
+        l <= r
+    } else if (operator == ">=") {
+        l >= r
+    } else if (operator == "!=") {
+        l != r
+    } else {
+        true
+    }
+}
+
+calculateTest(operator:string, leftValue:Maybe<Value>, rightValue:Maybe<Value>) -> Maybe<bool> {
+    maybeBind2(\l, r -> {
+        switch(l) {
+            IntValue(lval): {
+                switch(r) { 
+                    IntValue(rval): {
+                        Some(calcTest(operator, lval, rval))
+                    }
+                    default: None();
+                }
+            }
+            default: None();
+        }
+    }) (leftValue, rightValue)
+}
+
+labels2States(labels:[int], varTree:Tree<string, Value>) -> [State] {
+    map(labels, \i -> State(i, varTree))
+}
+
+runOperator(oper:Operator, varTree:Tree<string, Value>) -> [State] {
+    switch(oper) {
+            AssignmentOp(label, next, l, r): {
+            // println("assignment");
+            // println(r);
+            // println(l);
+            // println(calculateExp(r, varTree));
+            
+            switch(calculateExp(r, varTree)) {
+                Some(e): labels2States(next, setTree(varTree, l.varName, e));
+                None(): [];
+            }}
+            PrintOp(label, next, e): {
+                printExp(e, calculateExp(e, varTree));
+                labels2States(next, varTree)
+            } 
+            TestOp(label, next, alt, op, l, r): switch(calculateTest(op, calculateExp(l, varTree), calculateExp(r, varTree))) {
+                Some(res): labels2States(
+                    if (res) { next } else { alt }, 
+                    varTree
+                );
+                None(): [];
+            } 
+                
+    }
+}
+
+finish(state:State, program:Program) -> void {
+    println("Finished executing: ");
+    println(state.varTree);
+}
+
+getNextStates(state:State, program:Program) -> [State] {
+    nextOperators = getOperatorsByLabel(state.label, program.operators);
+    if (length(nextOperators) == 0) {
+        finish(state, program);
+        []
+    } else {
+        fold(nextOperators, [], \newStates, operator -> {
+            concat(newStates, runOperator(operator, state.varTree))
+        })
+    }
+}
+
+runTail(states:[State], i:int, program:Program) -> void {
+    // println("running");
+    // println(i);
+    // println(states);
+    if (length(states) > i) {
+        runTail(
+            concat(states, filter(getNextStates(states[i], program), \state -> !contains(states, state))),
+            i + 1, program
+        )
+    }
+}
+
+runProgram(program:Program) -> void {
+    runTail([getStartState(program.vars)], 0, program);
+}
+
+getValueForType(type:Type) -> Value {
+    switch(type) {
+        IntType(): IntValue(0);
+        ArrType(t): ArrValue([]);
+    }
+}
+
+getStartState(vars:[VarDeclarationLine]) -> State {
+    State(0, fold(
+        vars, makeTree(), \tree:Tree<string, Value>, line -> fold(line.names, tree, \t, name ->
+            setTree(t, name, getValueForType(line.type))
+        )
+    ))
+}
+
+main() {
+    nemo = parseNemo(getFileContent("test.nemo"));
+    println(nemo);
+    println("");
+    p = translate(nemo);
+    ptext = program2s(p);
+    println(ptext);
+    program = parseProgram(ptext);
+    println(program2s(program));
+    if (validateTypes(program)) {
+        runProgram(program)
+    }
+}

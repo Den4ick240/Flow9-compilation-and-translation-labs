@@ -1,0 +1,45 @@
+exp = addExp;
+
+ws = " "*;
+digit = '0'-'9';
+char = 'a'-'z' | 'A'-'Z';
+numberInt = ws (digit+)$n  ws 
+    {Number(s2d($n))};
+number = ws (digit+ '.' digit+)$n ws 
+    {Number(s2d($n))}
+    | numberInt;
+
+name = (char (digit | char)*);
+varName = ws name$n ws
+    {Variable($n)};
+
+
+expBrackets = ws '(' exp:e ')' ws {:e};
+negative = ws '-' numberB:v {Negative(:v)};
+
+
+abstractExp = ws '_' name$n ws
+    {AbstractVariable($n)};
+
+numberB =
+    number 
+    | abstractExp
+    | varName 
+    | expBrackets 
+    | negative;
+
+multSymbol = "*" | "/" | "%";
+addSymbol = "+" | "-";
+powSymbol = "^";
+
+addOperator = addSymbol$symbol multExp:r 
+    {BinaryOperation(:r, :r, $symbol)};
+multOperator = multSymbol$s (powExp | numberB):r 
+    {BinaryOperation(:r, :r, $s)};
+
+addExp = multExp:l addOperator*:add 
+    {buildSub(:l, :add)};
+multExp = (powExp | numberB):l multOperator*:mult 
+    {buildSub(:l, :mult)};
+powExp = numberB:l powSymbol$symbol numberB:r 
+    {BinaryOperation(:l, :r, $symbol)};

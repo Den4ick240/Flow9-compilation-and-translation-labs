@@ -1,0 +1,27 @@
+arr :[int] 
+i, j, temp, flag, l, r:int
+
+i = 0
+while i < 10 (arr = upd(arr, i, i) i = i + 1)
+flag = 1
+while (flag == 1) (
+    flag = 0
+    i = 0
+    while (i < 9) (
+        
+        l = app(arr, i)
+        r = app(arr, i + 1)
+        
+        
+        if l < r (
+            
+            arr = upd(arr, i, r)
+            arr = upd(arr, i + 1, l)
+            flag = 1           
+        )        
+        print arr
+        print i
+        i = i + 1
+    )
+    print flag
+)

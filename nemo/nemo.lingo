@@ -1,0 +1,104 @@
+nemoProgram = wsel* varDeclarationSection:vars allOperators:op { NemoProgram(:vars, :op) };
+
+operator = (
+    ifelseOp
+    | ifOp
+    | whileLoop
+    | printOperator
+    | assignment
+    | notTest
+    | test
+    | loop
+    | operatorInBrackets
+):r semicolon* { :r };
+seq = choiceOrOperator:head choiceOrOperator+:tail { NemoSequence(concat(array(:head), :tail)) };
+seqOrOperator = seq | operator;
+choiceOrOperator = choice | operator;
+allOperators = seq | choiceOrOperator;
+
+operatorInBrackets = open seqOrOperator:o close { :o };
+
+assignment = expVariable:var assign exp:value { NemoAssignment(:var, :value) }; 
+
+printOperator = print exp:e { NemoPrint(:e) };
+
+cond = condInner | condInBrackets;
+condInner = exp:l binPredicate:op exp:r { NemoTest(:op, :l, :r) };
+condInBrackets = open cond:c close { :c };
+test = cond:c testSign { :c };
+notTest = not cond:c testSign { NemoNotTest(:c) };
+
+choiceSequence = choiceSign operator:op { :op };
+choice = operator:head choiceSequence+:tail { NemoChoice(concat(array(:head), :tail)) };
+
+loop = open allOperators:o close loopSign {NemoLoop(:o)};
+
+ifOp = if cond:c operator:if 
+{ NemoChoice(concat(
+    array(NemoSequence(concat(array(:c), array(:if)))),
+    array(NemoNotTest(:c)))) };
+
+ifelseOp = if cond:c operator:if else operator:else
+{ NemoChoice(concat(
+    array(NemoSequence(concat(array(:c), array(:if)))),
+    array(NemoSequence(concat(array(NemoNotTest(:c)), array(:else))))))};
+
+
+
+whileLoop = while cond:c operator:body 
+{ NemoSequence(concat(array(NemoLoop(NemoSequence(concat(array(:c), array(:body))))),
+                      array(NemoNotTest(:c)))) };
+
+
+exp             = expAdd;
+expAdd          = expMul:l addSequence*:add                         { buildSub(:l, :add) };
+addSequence     = addSign:s expMul:r                                { ExpressionBinOperation(:s,:r, :r) };
+expMul          = expUnit:l mulSequence*:mul                        { buildSub(:l, :mul) };
+mulSequence     = mulSign:s expUnit:r                               { ExpressionBinOperation(:s, :r, :r) };
+expUnit         = expApp | expUpd | expConst | expVariable | expInBrackets;
+expVariable     = var:v                                             { ExpressionVariable(:v) };
+expApp          = app open exp:arr coma exp:i close                 { ExpressionApp(:arr, :i) };
+expUpd          = upd open exp:arr coma exp:i coma exp:val close    { ExpressionUpd(:arr, :i, :val) };
+expConst        = digit+$s wsel*                                    { ExpressionConst(s2i($s)) };
+expInBrackets   = open exp:e close                                  { :e };
+
+varDeclarationSection = varDeclarationLine*:a { :a };
+varDeclarationLine = var:a varNameSeq*:b ':' wsel* type:t semicolon* 
+                                                    { VarDeclarationLine(concat(array(:a), :b), :t) };
+varNameSeq = coma var;
+
+type    = arrType | intType;
+arrType = '[' wsel* type:t ']' wsel*    { ArrType(:t) };
+intType = 'int' wsel*                   { IntType() };
+
+var             = varName$n wsel* { $n };
+varName         = varNameSymbol (varNameSymbol | digit)*;
+varNameSymbol   = letter | '_'; 
+ 
+addSign      = ("+" | "-")$op wsel*                             { $op };
+mulSign      = ("*" | "/")$op wsel*                             { $op };
+binPredicate = ('<=' | '>=' | '==' | '!=' | '<' | '>')$op wsel* { $op };
+
+print = 'print' wsel*;
+not   = 'not'   wsel*;
+app   = 'app'   wsel*;
+upd   = 'upd'   wsel*;
+while = 'while' wsel*;
+if    = 'if'    wsel*;
+else  = 'else'  wsel*;
+elif  = 'elif'  wsel*;
+
+loopSign    = '*' wsel*; 
+choiceSign  = '|' wsel*;
+testSign    = '?' wsel*;
+semicolon   = ';' wsel*;
+assign      = '=' wsel*;
+open        = '(' wsel*;
+close       = ')' wsel*;
+coma        = ',' wsel*;
+
+wsel    = ws | endl;
+ws      = ' ' | '\t';
+endl    = '\r\n' | '\n';
+digit   = '0' - '9';
+letter  = 'a' - 'z' | 'A' - 'Z';

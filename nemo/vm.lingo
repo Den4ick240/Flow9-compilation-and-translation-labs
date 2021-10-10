@@ -1,0 +1,67 @@
+program = varDeclarationSection:vars "#" wsel* operator+:ops {Program(:vars, :ops)};
+
+operator = printOp | assignment | test;
+assignment = int:label colon expVariable:le assign exp:re labels:n {AssignmentOp(:label, :n, :le, :re)}; 
+printOp = int:label colon print exp:e labels:n {PrintOp(:label, :n, :e)};
+test = int:label colon exp:le binPredicate:op exp:re labels:n labels:alt 
+{TestOp(:label, :n, :alt, :op, :le, :re)};
+
+labels = emptyLabels | notEmptyLabels;
+emptyLabels = open close {emptyArray()};
+notEmptyLabels = open int:head nextSeq*:tail close { concat(array(:head), :tail) };
+nextSeq = coma int:i {:i};
+colon = ":" wsel*;
+int = digit+$s wsel* {s2i($s)};
+
+exp             = expAdd;
+expAdd          = expMul:l addSequence*:add                         { buildSub(:l, :add) };
+addSequence     = addSign:s expMul:r                                { ExpressionBinOperation(:s,:r, :r) };
+expMul          = expUnit:l mulSequence*:mul                        { buildSub(:l, :mul) };
+mulSequence     = mulSign:s expUnit:r                               { ExpressionBinOperation(:s, :r, :r) };
+expUnit         = expApp | expUpd | expConst | expVariable | expInBrackets;
+expVariable     = var:v                                             { ExpressionVariable(:v) };
+expApp          = app open exp:arr coma exp:i close                 { ExpressionApp(:arr, :i) };
+expUpd          = upd open exp:arr coma exp:i coma exp:val close    { ExpressionUpd(:arr, :i, :val) };
+expConst        = digit+$s wsel*                                    { ExpressionConst(s2i($s)) };
+expInBrackets   = open exp:e close                                  { :e };
+
+varDeclarationSection = varDeclarationLine*:a { :a };
+varDeclarationLine = var:a varNameSeq*:b ':' wsel* type:t semicolon* 
+                                                    { VarDeclarationLine(concat(array(:a), :b), :t) };
+varNameSeq = coma var;
+
+type    = arrType | intType;
+arrType = '[' wsel* type:t ']' wsel*    { ArrType(:t) };
+intType = 'int' wsel*                   { IntType() };
+
+var             = varName$n wsel* { $n };
+varName         = varNameSymbol (varNameSymbol | digit)*;
+varNameSymbol   = letter | '_'; 
+ 
+addSign      = ("+" | "-")$op wsel*                             { $op };
+mulSign      = ("*" | "/")$op wsel*                             { $op };
+binPredicate = ('<=' | '>=' | '==' | '!=' | '<' | '>')$op wsel* { $op };
+
+print = 'print' wsel*;
+not   = 'not'   wsel*;
+app   = 'app'   wsel*;
+upd   = 'upd'   wsel*;
+while = 'while' wsel*;
+if    = 'if'    wsel*;
+else  = 'else'  wsel*;
+elif  = 'elif'  wsel*;
+
+loopSign    = '*' wsel*; 
+choiceSign  = '|' wsel*;
+testSign    = '?' wsel*;
+semicolon   = ';' wsel*;
+assign      = '=' wsel*;
+open        = '(' wsel*;
+close       = ')' wsel*;
+coma        = ',' wsel*;
+
+wsel    = ws | endl;
+ws      = ' ' | '\t';
+endl    = '\r\n' | '\n';
+digit   = '0' - '9';
+letter  = 'a' - 'z' | 'A' - 'Z';

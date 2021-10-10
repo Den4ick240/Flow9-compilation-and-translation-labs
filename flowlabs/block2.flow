@@ -1,0 +1,210 @@
+    import runtime;
+    import lingo/pegcode/driver;
+    import math/math;
+    import net/url_parameter;
+    import ds/tree;
+    import sys/system;
+    import grammar;
+
+gram = "#include block2.lingo";
+// gram = "#include rules.lingo"
+ArythmeticTree ::= BinaryOperation, Number, Variable, AbstractVariable, Negative;
+BinaryOperation(l: ArythmeticTree, r: ArythmeticTree, symbol: string);
+Number(n: double);
+Variable(name: string);
+AbstractVariable(name: string);
+Negative(sub: ArythmeticTree);
+
+CompareTreeRes(exprs: Tree<string, ArythmeticTree>, res: bool);
+
+grammar = compilePegGrammar(gram);
+
+main() {
+    EXPRESSION_PARAMETER_NAME:string = "expression";
+    RULES_FILE_NAME:string = "rules.txt";
+    exp:string = getUrlParameterDef(EXPRESSION_PARAMETER_NAME, "1");
+    rules = readRules(RULES_FILE_NAME);
+    
+    varTree = fold(getAllUrlParametersArray(), makeTree(), 
+        \acc, par -> {
+            if (par[0] == EXPRESSION_PARAMETER_NAME)
+                acc
+            else
+                setTree(acc, par[0], s2d(par[1]))
+        });
+    tree = s2atree(exp);
+    println(tree);
+    println(atreeSimplify(tree, rules));
+    println(atree2s(tree));
+    println(atree2s(atreeSimplify(tree, rules)));
+    println("");
+    maybeMap(atree2d(tree, varTree), println);
+}
+
+readRules(fileName: string) -> [Pair<ArythmeticTree, ArythmeticTree>] {
+    ENDL = "\r\n";
+    SEPR = "->";
+    fold(
+        strSplit(getFileContentBinary(fileName), ENDL),
+        [],
+        \rules, line -> 
+            if (line != "") 
+                concat(rules, [
+                        strSplit(line, SEPR) |> \r -> 
+                        Pair(s2atree(r[0]), s2atree(r[1]))
+                    ]
+                )
+            else
+                rules
+    )
+}
+
+isCommutative(s: string) -> bool {
+    switch(lookupTree(operationTree, s)) {
+        Some(v): v.commutative
+        None(): false
+    }
+}
+
+compareBinaryOperations(subTree: BinaryOperation, rule: BinaryOperation, exprs: Tree<string, ArythmeticTree>) -> CompareTreeRes {
+    returnDefault = CompareTreeRes(exprs, false);
+    if (subTree.symbol != rule.symbol) {
+        returnDefault;
+    } else {
+        lcmp = compareTrees(subTree.l, rule.l, exprs);
+        /*rcmp = */if (lcmp.res) {
+            compareTrees(subTree.r, rule.r, lcmp.exprs);
+        } else {
+            returnDefault;
+        }
+        // if (lcmp.res && rcmp.res) {
+        //     rcmp;
+        // } else {
+        //     if (eitherMap(lookupTree(operationTree, rule.symbol), \v -> v.commutative, false)) {
+        //         cmp = compareTrees(subTree.l, rule.r, exprs);
+        //         if (!cmp.res) {
+        //             returnDefault;
+        //         } else {
+        //             compareTrees(subTree.r, rule.l, cmp.exprs);
+        //         }
+        //     } 
+        //     else {
+        //         returnDefault;
+        //     }
+        // }
+    }
+}
+
+compareTrees(subTree:ArythmeticTree, rule: ArythmeticTree, exprs: Tree<string, ArythmeticTree>) -> CompareTreeRes {
+    returnDefault = CompareTreeRes(exprs, false);
+    switch (rule) {
+        AbstractVariable(name): switch (lookupTree(exprs, name)) {
+                Some(namedSubTree): compareTrees(subTree, namedSubTree, exprs);
+                None(): CompareTreeRes(setTree(exprs, name, subTree), true);
+             }
+        BinaryOperation(lrule, rrule, op_rule): switch (subTree: ArythmeticTree) {
+                BinaryOperation(lsubTree, rsubTree, op_subTree): compareBinaryOperations(subTree, rule, exprs);
+                default: returnDefault;
+            }
+        Number(n): switch (subTree) {
+                Number(n2): CompareTreeRes(exprs, n == n2);
+                default: returnDefault;
+            }
+        Variable(name): switch (subTree) {
+                Variable(name2): CompareTreeRes(exprs, name == name2);
+                default: returnDefault;
+            }
+        Negative(s): switch (subTree) {
+                Negative(s2): compareTrees(s2, s, exprs);
+                default: returnDefault;
+            }
+    }
+}
+
+copyRule(tree: ArythmeticTree, exprs: Tree<string, ArythmeticTree>) -> ArythmeticTree {
+    switch (tree) {
+        BinaryOperation(l, r, op): BinaryOperation(copyRule(l, exprs), copyRule(r, exprs), op)
+        AbstractVariable(name): either(lookupTree(exprs, name), Variable("error"))
+        Number(v): Number(v)
+        Variable(name): Variable(name)
+        Negative(s): Negative(copyRule(s, exprs))
+    }
+}
+
+rewrite(subTree:ArythmeticTree, rules: [Pair<ArythmeticTree, ArythmeticTree>]) -> ArythmeticTree {
+    fold(rules, subTree, \tree, rule -> 
+        compareTrees(tree, rule.first, makeTree()) |> \cmp ->
+            if (cmp.res) {
+                atreeSimplify(copyRule(rule.second, cmp.exprs), rules);
+            } else {
+                tree;
+            }
+    )
+}
+
+atreeSimplify(tree: ArythmeticTree, rules: [Pair<ArythmeticTree, ArythmeticTree>]) -> ArythmeticTree {
+    switch (tree) {
+        BinaryOperation(l, r, op): {
+            newTree = BinaryOperation(
+                atreeSimplify(l, rules),
+                atreeSimplify(r, rules),
+                op
+            );
+            rewrite(
+                eitherMap(atree2d(newTree, makeTree()), \v -> Number(v), newTree), 
+                rules
+            );
+        }
+        Negative(t): rewrite(atreeSimplify(t, rules), rules);
+        default: rewrite(tree, rules);
+    }
+}
+
+Operator(func: (double, double) -> double, commutative: bool);
+
+operationTree:Tree = makeTree() 
+|> \add -> setTree(add, "+", Operator(\x, y -> x + y, true))
+|> \sub -> setTree(sub, "-", Operator(\x, y -> x - y, false))
+|> \mul -> setTree(mul, "*", Operator(\x, y -> x * y, true))
+|> \div -> setTree(div, "/", Operator(\x, y -> x / y, false))
+|> \mod -> setTree(mod, "%", Operator(\x, y -> x % y, false))
+|> \pow -> setTree(pow, "^", Operator(\x, y -> dpow(x, y), false));
+
+buildSub(xs : [flow]) {
+	fold(xs[1], xs[0], 
+        \acc, x -> BinaryOperation(acc, x.r, x.symbol));
+}
+
+specialPegActions = {
+	t = setTree(defaultPegActions.t, "buildSub", buildSub);
+    SemanticActions(t);
+}
+
+s2atree(str: string) -> ArythmeticTree {
+    parsic(pegOps4Block2, str, specialPegActions);  
+}
+
+atree2s(tree: ArythmeticTree) -> string {
+    switch (tree) {
+        BinaryOperation(l, r, op): "(" + atree2s(l) + " " + op + " " + atree2s(r) + ")";
+        Number(v): d2s(v);
+        Variable(name): name;
+        AbstractVariable(name): ("_" + name);
+        Negative(t): "-" + atree2s(t);
+    }
+}
+
+atree2d(tree: ArythmeticTree, vars: Tree<string, double>) -> Maybe<double> {
+    switch (tree) {
+        BinaryOperation(l, r, opSym): maybeBind(
+                lookupTree(operationTree, opSym),
+                \op -> maybeMap2(op.func)(
+                    atree2d(l, vars),
+                    atree2d(r, vars)
+                )
+            )
+        Number(v): Some(v)
+        Variable(name): lookupTree(vars, name)
+        default: None()
+    }
+}

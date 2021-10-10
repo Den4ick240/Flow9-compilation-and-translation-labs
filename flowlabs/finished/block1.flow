@@ -1,0 +1,131 @@
+import runtime;
+import string;
+import ds/array;
+import ds/tree;
+
+lab1() -> void {
+    a = [1, 2, 3];
+    b = map(a, i2s);
+    println(strGlue(b, ", "))
+}
+
+lab2() -> void {
+    a = [1, 2, 3];
+    b = fold(a, 0, \x, y -> x + y);
+    println(b)
+}
+
+fib1(n : int) -> [int] {
+    if (n == 0) {
+        [];
+    } else if (n == 1) {
+        [0];
+    } else if (n == 2) {
+        [0, 1];
+    }
+    else {
+        a = fib1(n - 1);
+        concat(a, [a[n - 2] + a[n - 3]]);
+    }
+}
+
+fib2(n : int) -> [int] {
+    if (n == 0) {
+        [];
+    } else if (n == 1) {
+        [0];
+    } else if (n == 2) {
+        [0, 1];
+    }
+    else {
+        fib2tail(n, [0, 1])
+    }
+}
+
+fib2tail(n : int, arr : [int]) -> [int] {
+    if (n == 2) {
+        arr;
+    } else {
+        l = length(arr);
+        fib2tail(n - 1, concat(arr, [arr[l - 1] + arr[l - 2]]));
+    }
+}
+
+
+fib3(n : int) -> ref [int] {
+    if (n == 0) {
+        ref [];
+    } else if (n == 1) {
+        ref [0];
+    } else if (n == 2) {
+        ref [0, 1];
+    }
+    else {
+        fib3tail(n, ref [0, 1])
+    }
+}
+
+fib3tail(n : int, arr : ref [int]) -> ref [int] {
+    if (n == 2) {
+        arr;
+    } else {
+        l = length(^arr);
+        refArrayPush(arr, ^arr[l - 1] + ^arr[l - 2]);
+        fib3tail(n - 1, arr);
+    }
+}
+
+lab3() -> void {
+    println(fib1(6));
+    println(fib2(8));
+    println(fib3(10));
+}
+
+inds(a : [int], m :int) -> [Pair<int, int>] {
+    foldi(
+        a, 
+        Pair(makeTree(), []), 
+        \index, treeAndRes, number -> {
+            tree = treeAndRes.first;
+            result = treeAndRes.second;
+            newResult = 
+            switch(lookupTree(tree, (m - number))) {
+                Some(value): 
+                    fold(
+                        value, 
+                        result, 
+                        \arr, x -> concat(arr, [Pair(index, x)])
+                    );
+                None(): result;
+            };
+            newTree =
+            switch(lookupTree(tree, number)) {
+                Some(value): 
+                    setTree(
+                        tree, 
+                        number, 
+                        concat(value, [index])
+                    ); 
+                None(): setTree(tree, number, [index]);
+            };
+            Pair(newTree, newResult);
+    }).second;
+}
+
+lab4() -> void {
+    m = 6;
+    arr = [1,3,4,2,4,3];
+    res = inds(arr, m);
+    println(res);
+}
+
+main() {
+    println("lab1:");
+    lab1();
+    println("lab2:");
+    lab2();
+    println("lab3:");
+    lab3();
+    println("lab4:");
+    lab4();
+}
